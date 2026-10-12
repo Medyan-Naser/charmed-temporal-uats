@@ -6,7 +6,6 @@ default:
 
 [private]
 clean:
-    rm -rf ./temporal-k8s-operator/
     rm ./worker_python/*.rock
     rm ./worker_go/*.rock
 
@@ -24,11 +23,6 @@ push-to-local-registry rock_filepath registry tag: (start-local-registry)
     rockcraft.skopeo --insecure-policy copy --dest-tls-verify=false \
         "oci-archive:${rock_filepath}" \
         "docker://localhost:5000/${registry}:${tag}"
-
-[private]
-clone-temporal-k8s-repo branch="track/1.23":
-    rm -rf ./temporal-k8s-operator
-    git clone --branch ${branch} --single-branch https://github.com/canonical/temporal-k8s-operator.git temporal-k8s-operator
 
 [private]
 install-nginx-controller:
@@ -95,7 +89,7 @@ destroy-cos-model:
 destroy-all-models: destroy-server-model destroy-workers-model destroy-cos-model
 
 [private]
-deploy-temporal-server model_suffix="fixed" temporal_channel="1.23/edge" postgresql_channel="14/stable" nginx_ingress_integrator_channel="latest/stable" self_signed_certificates_channel="1/stable":
+deploy-temporal-server model_suffix="fixed" temporal_channel="1.31/edge" postgresql_channel="14/stable" nginx_ingress_integrator_channel="latest/stable" self_signed_certificates_channel="1/stable":
     #!/usr/bin/bash
     juju switch temporal-server-uats-${model_suffix}
 
@@ -126,7 +120,7 @@ deploy-cos model_suffix="fixed" cos_channel="latest/stable":
     # TODO: add tracing
 
 [private]
-deploy-workers worker_python_image worker_go_image model_suffix="fixed" worker_channel="1.0/edge":
+deploy-workers worker_python_image worker_go_image model_suffix="fixed" worker_channel="2.0/edge":
     #!/usr/bin/bash
     juju switch temporal-workers-uats-${model_suffix}
 
@@ -220,7 +214,7 @@ format:
     tox -e format
 
 # Deploy the Temporal applications for UATs
-deploy-temporal temporal_track="1.23" temporal_worker_track="1.0" temporal_risk="edge":
+deploy-temporal temporal_track="1.31" temporal_worker_track="2.0" temporal_risk="edge":
     #!/usr/bin/bash
     set -euxo pipefail
 

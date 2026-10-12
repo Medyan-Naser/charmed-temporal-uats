@@ -7,17 +7,17 @@ on:
       server-track:
         description: 'Server-side charm channel track'
         required: false
-        default: '1.23'
+        default: '1.31'
         type: choice
         options:
-          - '1.23'
+          - '1.31'
       worker-track:
         description: 'Worker charm channel track'
         required: false
-        default: '1.0'
+        default: '2.0'
         type: choice
         options:
-          - '1.0'
+          - '2.0'
       risk:
         description: 'Charm channel risk to test against'
         required: true
@@ -56,9 +56,14 @@ jobs:
         run: |
           set -e
 
-          goss_base_url="https://github.com/goss-org/goss/releases/latest/download"
-          curl -L ${goss_base_url}/goss-linux-amd64 -o /usr/local/bin/goss
-          chmod +rx /usr/local/bin/goss
+          GOSS_VERSION="v0.4.10"
+          curl -fSL \
+            "https://github.com/goss-org/goss/releases/download/${GOSS_VERSION}/goss_${GOSS_VERSION#v}_linux_x86_64.tar.gz" \
+            -o /tmp/goss.tar.gz
+
+          sudo tar -xzf /tmp/goss.tar.gz -C /usr/local/bin goss
+          sudo chmod +x /usr/local/bin/goss
+          /usr/local/bin/goss --version
 
           sudo apt-get purge $(dpkg -l | grep -i docker | awk '{print $2}')
           sudo apt-get purge containerd.io
@@ -77,7 +82,7 @@ jobs:
           sudo snap start docker
 
       - name: Deploy Temporal models
-        run: just deploy-temporal ${{ inputs.server-track || '1.23' }} ${{ inputs.worker-track || '1.0' }} ${{ inputs.risk || 'edge' }}
+        run: just deploy-temporal ${{ inputs.server-track || '1.31' }} ${{ inputs.worker-track || '2.0' }} ${{ inputs.risk || 'edge' }}
 
       - name: Execute UATs
         run: just ${{ matrix.uat }}
