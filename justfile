@@ -200,9 +200,10 @@ create-namespaces:
     #!/usr/bin/bash
     set -euxo pipefail
 
-    juju switch "temporal-server-uats-$(just get-model-suffix)"
-    juju wait-for application temporal-k8s --query='name == "temporal-k8s" && status == "active"'
-    juju wait-for application temporal-admin-k8s --query='name == "temporal-admin-k8s" && status == "active"'
+    model_suffix=$(just get-model-suffix)
+    juju switch "temporal-server-uats-${model_suffix}"
+    ./scripts/wait-for-juju-app "temporal-server-uats-${model_suffix}" temporal-k8s
+    ./scripts/wait-for-juju-app "temporal-server-uats-${model_suffix}" temporal-admin-k8s
     juju run temporal-admin-k8s/0 cli args="operator namespace create --namespace worker-go-namespace --retention 3d" --wait 2m
     juju run temporal-admin-k8s/0 cli args="operator namespace create --namespace worker-python-namespace --retention 3d" --wait 2m
 
