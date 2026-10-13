@@ -89,30 +89,42 @@ destroy-cos-model:
 destroy-all-models: destroy-server-model destroy-workers-model destroy-cos-model
 
 [private]
-deploy-temporal-server model_suffix="fixed" temporal_channel="1.31/edge" postgresql_channel="14/stable" nginx_ingress_integrator_channel="latest/stable" self_signed_certificates_channel="1/stable":
+deploy-temporal-server model_suffix="fixed" temporal_channel="1.31/edge" postgresql_channel="14/stable" nginx_ingress_integrator_channel="latest/stable" self_signed_certificates_channel="1/stable" force="false":
     #!/usr/bin/bash
     juju switch temporal-server-uats-${model_suffix}
 
-    juju deploy postgresql-k8s --channel "${postgresql_channel}" --trust
+    # juju 4.x only supports ubuntu@24.04+ bases. --force bypasses the base
+    # check for charms that have not declared juju 4 support yet (e.g.
+    # postgresql-k8s and nginx-ingress-integrator, which tops out at 22.04).
+    force_flag=""
+    if [ "${force}" = "true" ]; then
+        force_flag="--force"
+    fi
+    juju deploy postgresql-k8s --channel "${postgresql_channel}" --trust ${force_flag}
 
-    juju deploy temporal-k8s --channel "${temporal_channel}" \
+    juju deploy temporal-k8s --channel "${temporal_channel}" ${force_flag} \
         --config num-history-shards=1 \
         --config auth-enabled=false
-    juju deploy temporal-admin-k8s --channel "${temporal_channel}"
-    juju deploy temporal-ui-k8s --channel "${temporal_channel}" \
+    juju deploy temporal-admin-k8s --channel "${temporal_channel}" ${force_flag}
+    juju deploy temporal-ui-k8s --channel "${temporal_channel}" ${force_flag} \
         --config tls-secret-name=""
 
     juju deploy nginx-ingress-integrator temporal-ui-ingress \
-        --channel "${nginx_ingress_integrator_channel}" --trust \
+        --channel "${nginx_ingress_integrator_channel}" --trust ${force_flag} \
         --config ingress-class=nginx \
         --config backend-protocol=HTTP \
         --config service-hostname=temporal-ui-k8s
 
-    juju deploy self-signed-certificates --channel "${self_signed_certificates_channel}"
+    juju deploy self-signed-certificates --channel "${self_signed_certificates_channel}" ${force_flag}
 
 [private]
-deploy-cos model_suffix="fixed" cos_channel="latest/stable":
-    juju deploy --model cos-uats-${model_suffix} cos-lite --channel="${cos_channel}" --trust
+deploy-cos model_suffix="fixed" cos_channel="latest/stable" force="false":
+    #!/usr/bin/bash
+    force_flag=""
+    if [ "${force}" = "true" ]; then
+        force_flag="--force"
+    fi
+    juju deploy --model cos-uats-${model_suffix} cos-lite --channel="${cos_channel}" --trust ${force_flag}
 
     juju offer cos-uats-${model_suffix}.grafana:grafana-dashboard
     juju offer cos-uats-${model_suffix}.loki:logging
@@ -120,18 +132,22 @@ deploy-cos model_suffix="fixed" cos_channel="latest/stable":
     # TODO: add tracing
 
 [private]
-deploy-workers worker_python_image worker_go_image model_suffix="fixed" worker_channel="2.0/edge":
+deploy-workers worker_python_image worker_go_image model_suffix="fixed" worker_channel="2.0/edge" force="false":
     #!/usr/bin/bash
     juju switch temporal-workers-uats-${model_suffix}
 
+    force_flag=""
+    if [ "${force}" = "true" ]; then
+        force_flag="--force"
+    fi
     juju deploy temporal-worker-k8s temporal-worker-k8s-python \
-        --channel ${worker_channel} \
+        --channel ${worker_channel} ${force_flag} \
         --resource temporal-worker-image=${worker_python_image} \
         --config host=temporal-k8s.temporal-server-uats-${model_suffix}:7233 \
         --config queue=worker-python-queue \
         --config namespace=worker-python-namespace
     juju deploy temporal-worker-k8s temporal-worker-k8s-go \
-        --channel ${worker_channel} \
+        --channel ${worker_channel} ${force_flag} \
         --resource temporal-worker-image=${worker_go_image} \
         --config host=temporal-k8s.temporal-server-uats-${model_suffix}:7233 \
         --config queue=worker-go-queue \
@@ -214,7 +230,7 @@ format:
     tox -e format
 
 # Deploy the Temporal applications for UATs
-deploy-temporal temporal_track="1.31" temporal_worker_track="2.0" temporal_risk="edge":
+deploy-temporal temporal_track="1.31" temporal_worker_track="2.0" temporal_risk="edge" postgresql_channel="14/stable" force="false":
     #!/usr/bin/bash
     set -euxo pipefail
 
@@ -232,9 +248,9 @@ deploy-temporal temporal_track="1.31" temporal_worker_track="2.0" temporal_risk=
 
     just create-models ${suffix}
 
-    just deploy-temporal-server ${suffix} "${temporal_track}/${temporal_risk}"
-    just deploy-cos ${suffix}
-    just deploy-workers localhost:5000/worker-python:dev localhost:5000/worker-go:dev ${suffix} "${temporal_worker_track}/${temporal_risk}"
+    just deploy-temporal-server ${suffix} "${temporal_track}/${temporal_risk}" "${postgresql_channel}" "latest/stable" "1/stable" "${force}"
+    just deploy-cos ${suffix} "latest/stable" "${force}"
+    just deploy-workers localhost:5000/worker-python:dev localhost:5000/worker-go:dev ${suffix} "${temporal_worker_track}/${temporal_risk}" "${force}"
 
     just integrate-applications ${suffix}
 

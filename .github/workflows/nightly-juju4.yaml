@@ -1,0 +1,153 @@
+# Copyright 2026 Canonical Ltd.
+# See LICENSE file for licensing details.
+
+# Nightly UATs against Juju 4.x.
+#
+# This is a parallel CI pipeline that mirrors the UATs in uats.yaml but runs
+# with the latest stable Juju 4.x release. It is scheduled to run nightly so
+# the team can spot Juju 4 compatibility issues early and report them to the
+# Juju team.
+#
+# Key differences from uats.yaml:
+#   - Juju channel: 4/stable (see custom-concierge-juju4.yaml)
+#   - postgresql-k8s channel: 16/stable (14/stable does not support juju 4)
+#   - postgresql-k8s deployed with --force to bypass base checks until the
+#     charm formally declares Juju 4 support
+#
+# The regular CI (uats.yaml / Juju 3.x) is NOT affected by this workflow.
+
+name: Nightly Juju 4.x UATs
+
+on:
+  schedule:
+    # Run at 02:00 UTC every day
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # Allow manual triggering for ad-hoc runs
+    inputs:
+      server-track:
+        description: 'Server-side charm channel track'
+        required: false
+        default: '1.31'
+        type: choice
+        options:
+          - '1.31'
+      worker-track:
+        description: 'Worker charm channel track'
+        required: false
+        default: '2.0'
+        type: choice
+        options:
+          - '2.0'
+      risk:
+        description: 'Charm channel risk to test against'
+        required: true
+        default: 'edge'
+        type: choice
+        options:
+          - edge
+          - beta
+          - candidate
+          - stable
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  uats-juju4:
+    name: Run UATs (${{ matrix.uat }}) [juju 4.x]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        uat:
+          - uats-namespace-isolation
+          - uats-ingress
+          - uats-cos
+      fail-fast: false
+
+    steps:
+      - name: Maximize GH runner disk
+        uses: jlumbroso/free-disk-space@v1.3.1
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up operator environment
+        run: |
+          set -e
+
+          GOSS_VERSION="v0.4.10"
+          curl -fSL \
+            "https://github.com/goss-org/goss/releases/download/${GOSS_VERSION}/goss_${GOSS_VERSION#v}_linux_x86_64.tar.gz" \
+            -o /tmp/goss.tar.gz
+
+          sudo tar -xzf /tmp/goss.tar.gz -C /usr/local/bin goss
+          sudo chmod +x /usr/local/bin/goss
+          /usr/local/bin/goss --version
+
+          sudo apt-get purge $(dpkg -l | grep -i docker | awk '{print $2}')
+          sudo apt-get purge containerd.io
+          sudo rm -r /run/containerd
+
+          sudo snap install concierge --classic
+          sudo -E concierge prepare -c .github/workflows/custom-concierge-juju4.yaml
+          sudo k8s enable ingress
+          sudo k8s kubectl config view --raw > ~/.kube/config
+          uv tool install tox
+          just install-nginx-controller
+
+      - name: Install docker (after k8s bootstrapped)
+        run: |
+          sudo snap install docker
+          sudo snap start docker
+
+      - name: Deploy Temporal models
+        # postgresql-k8s 14/stable does not support juju 4; use 16/stable.
+        # force=true deploys all charms with --force to bypass juju 4 base
+        # checks (e.g. nginx-ingress-integrator tops out at ubuntu@22.04).
+        run: just deploy-temporal ${{ inputs.server-track || '1.31' }} ${{ inputs.worker-track || '2.0' }} ${{ inputs.risk || 'edge' }} "16/stable" "true"
+
+      - name: Execute UATs
+        run: just ${{ matrix.uat }}
+
+      - name: Get system state (if failure)
+        if: failure()
+        run: just get-system-state
+
+  # Open a GitHub issue when the scheduled nightly run has any failures so the
+  # team has a visible, assignable record to triage.  Does not fire on
+  # workflow_dispatch runs so manual ad-hoc reruns stay noise-free.
+  notify-on-failure:
+    name: Open issue on nightly failure
+    runs-on: ubuntu-latest
+    needs: [uats-juju4]
+    if: failure() && github.event_name == 'schedule'
+    permissions:
+      issues: write
+    steps:
+      - name: Create failure issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const date = new Date().toISOString().split('T')[0];
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `Nightly Juju 4.x UAT failure — ${date}`,
+              body: [
+                '## Nightly Juju 4.x UATs failed',
+                '',
+                `**Date:** ${date}`,
+                `**Run:** ${runUrl}`,
+                '',
+                'Please investigate the failed jobs in the run above, determine whether',
+                'the failure is in our charms or in a dependency (Juju, postgresql-k8s, etc.),',
+                'and triage accordingly.',
+                '',
+                '> This issue was opened automatically by the nightly CI workflow.',
+              ].join('\n'),
+              labels: ['ci-failure', 'juju4'],
+            });
